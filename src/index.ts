@@ -82,10 +82,28 @@ async function login(): Promise<void> {
   console.log("Login successful!");
 }
 
+const MAX_LOGIN_ATTEMPTS = 3;
+
 async function ensureLoggedIn(): Promise<void> {
-  if (!(await isLoggedIn())) {
-    console.log("Session expired, logging in...");
-    await login();
+  if (await isLoggedIn()) return;
+
+  console.log("Session expired, logging in...");
+  
+  for (let attempt = 1; attempt <= MAX_LOGIN_ATTEMPTS; attempt++) {
+    try {
+      await login();
+      return;
+    } catch (error) {
+      console.error(`Login attempt ${attempt}/${MAX_LOGIN_ATTEMPTS} failed:`, error);
+      
+      if (attempt === MAX_LOGIN_ATTEMPTS) {
+        console.error("Max login attempts reached, terminating...");
+        process.kill(process.pid, "SIGTERM");
+      }
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
   }
 }
 
