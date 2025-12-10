@@ -13,6 +13,28 @@ if (!CREDENTIALS.identifier || !CREDENTIALS.password) {
   process.exit(1);
 }
 
+// Redis cache
+const redis = new Bun.RedisClient(process.env.REDIS_URL || "redis://localhost:6379");
+const CACHE_PREFIX = "hytale:username:";
+const AVAILABLE_TTL = 60; // 1 minute for available names
+
+async function getCachedAvailability(username: string): Promise<boolean | null> {
+  const cached = await redis.get(`${CACHE_PREFIX}${username.toLowerCase()}`);
+  if (cached === null) return null;
+  return cached === "1";
+}
+
+async function setCachedAvailability(username: string, available: boolean): Promise<void> {
+  const key = `${CACHE_PREFIX}${username.toLowerCase()}`;
+  if (available) {
+    // Available names cached for 1 minute
+    await redis.set(key, "1", "EX", AVAILABLE_TTL);
+  } else {
+    // Taken names cached forever
+    await redis.set(key, "0");
+  }
+}
+
 const cookieJar = new CookieJar();
 const fetchWithCookies = fetchCookie(fetch, cookieJar);
 
@@ -107,14 +129,27 @@ async function ensureLoggedIn(): Promise<void> {
   }
 }
 
-async function checkUsername(username: string): Promise<boolean> {
+async function checkUsername(username: string): Promise<{ available: boolean; cached: boolean }> {
+  // Check cache first
+  const cached = await getCachedAvailability(username);
+  if (cached !== null) {
+    return { available: cached, cached: true };
+  }
+
+  // Not in cache, check API
   const response = await fetchWithCookies(
     `https://accounts.hytale.com/api/account/username-reservations/availability?username=${encodeURIComponent(username)}`
   );
-  return response.status === 200;
+  const available = response.status === 200;
+
+  // Cache the result
+  await setCachedAvailability(username, available);
+
+  return { available, cached: false };
 }
 
 await ensureLoggedIn();
+console.log("Connected to Redis");
 
 const app = new Elysia()
   .use(cors({ origin: "*" }))
@@ -129,13 +164,14 @@ const app = new Elysia()
     await ensureLoggedIn();
     
     const { username } = params;
-    const available = await checkUsername(username);
+    const { available, cached } = await checkUsername(username);
 
-    console.log(`Username "${username}" is ${available ? "available" : "taken"}`);
+    console.log(`Username "${username}" is ${available ? "available" : "taken"}${cached ? " (cached)" : ""}`);
     
     return {
       username,
       available,
+      cached,
     };
   })
   .get("/status", async () => {
