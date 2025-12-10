@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { cors } from "@elysiajs/cors";
 import { CookieJar } from "tough-cookie";
 import fetchCookie from "fetch-cookie";
 
@@ -98,6 +99,7 @@ async function checkUsername(username: string): Promise<boolean> {
 await ensureLoggedIn();
 
 const app = new Elysia()
+  .use(cors({ origin: "*" }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
     endpoints: {
