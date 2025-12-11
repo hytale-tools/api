@@ -2,6 +2,9 @@ import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { CookieJar } from "tough-cookie";
 import fetchCookie from "fetch-cookie";
+import { Ratelimit } from "@upstash/ratelimit";
+import Redis from "ioredis";
+import { createIoRedisAdapter } from "./redis";
 
 const CREDENTIALS = {
   identifier: process.env.HYTALE_EMAIL!,
@@ -14,9 +17,15 @@ if (!CREDENTIALS.identifier || !CREDENTIALS.password) {
 }
 
 // Redis cache
-const redis = new Bun.RedisClient(process.env.REDIS_URL || "redis://localhost:6379");
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 const CACHE_PREFIX = "hytale:username:";
 const AVAILABLE_TTL = 60; // 1 minute for available names
+
+const ratelimit = new Ratelimit({
+  redis: createIoRedisAdapter(redis),
+  limiter: Ratelimit.slidingWindow(30, "60 s"), // 30 requests per minute
+  prefix: "hytale:ratelimit",
+});
 
 async function getCachedAvailability(username: string): Promise<boolean | null> {
   const cached = await redis.get(`${CACHE_PREFIX}${username.toLowerCase()}`);
@@ -121,23 +130,34 @@ async function ensureLoggedIn(): Promise<void> {
 
 type CheckResult = 
   | { ok: true; available: boolean; cached: boolean }
-  | { ok: false; status: number };
+  | { ok: false; error: "hytale_api_error"; status: number }
+  | { ok: false; error: "rate_limited"; retryAfter: number };
 
-async function checkUsername(username: string): Promise<CheckResult> {
-  // Check cache first
+async function checkUsername(username: string, ip: string): Promise<CheckResult> {
+  // Check cache first - no rate limit needed for cached
   const cached = await getCachedAvailability(username);
+  
   if (cached !== null) {
     return { ok: true, available: cached, cached: true };
   }
 
-  // Not in cache, check API
+  // Not cached - check rate limit before hitting API
+  const rateLimit = await ratelimit.limit("check_username", {
+    ip
+  });
+
+  if (!rateLimit.success) {
+    return { ok: false, error: "rate_limited", retryAfter: Math.ceil((rateLimit.reset - Date.now()) / 1000) };
+  }
+
+  // Check API
   const response = await fetchWithCookies(
     `https://accounts.hytale.com/api/account/username-reservations/availability?username=${encodeURIComponent(username)}`
   );
 
   if (response.status !== 200 && response.status !== 400) {
     console.error(`Hytale API error: ${response.status}`);
-    return { ok: false, status: response.status };
+    return { ok: false, error: "hytale_api_error", status: response.status };
   }
 
   const available = response.status === 200;
@@ -160,15 +180,22 @@ const app = new Elysia()
       "GET /status": "Get session status",
     },
   }))
-  .get("/check/:username", async ({ params, set }) => {
+  .get("/check/:username", async ({ params, set, request, server }) => {
     await ensureLoggedIn();
     
+    const ip = server?.requestIP(request)?.address ?? "unknown";
     const { username } = params;
-    const result = await checkUsername(username);
+    const result = await checkUsername(username, ip);
 
     if (!result.ok) {
+      if (result.error === "rate_limited") {
+        set.status = 429;
+        set.headers["retry-after"] = String(result.retryAfter);
+        return { error: "rate_limited", retryAfter: result.retryAfter };
+      }
+      
       set.status = 502;
-      return { error: "Hytale API error", status: result.status };
+      return { error: "hytale_api_error", status: result.status };
     }
 
     console.log(`Username "${username}" is ${result.available ? "available" : "taken"}${result.cached ? " (cached)" : ""}`);
