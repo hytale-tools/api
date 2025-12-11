@@ -38,16 +38,18 @@ async function setCachedAvailability(username: string, available: boolean): Prom
 const cookieJar = new CookieJar();
 const fetchWithCookies = fetchCookie(fetch, cookieJar);
 
-async function isLoggedIn(): Promise<boolean> {
-  const response = await fetchWithCookies(
-    "https://accounts.hytale.com/api/account/username-reservations/availability?username=test",
-    { redirect: "manual" }
-  );
-  return response.status === 200 || response.status === 400;
+function isSessionValid(): boolean {
+  const cookies = cookieJar.getCookiesSync("https://hytale.com");
+  const sessionCookie = cookies.find(c => c.key === "ory_kratos_session");
+  if (!sessionCookie?.expires) return false;
+  
+  // Consider session invalid 5 minutes before actual expiry for safety margin
+  const expiresAt = new Date(sessionCookie.expires).getTime();
+  return Date.now() < expiresAt - 5 * 60 * 1000;
 }
 
-async function getSessionExpiry(): Promise<Date | null> {
-  const cookies = await cookieJar.getCookies("https://hytale.com");
+function getSessionExpiry(): Date | null {
+  const cookies = cookieJar.getCookiesSync("https://hytale.com");
   const sessionCookie = cookies.find(c => c.key === "ory_kratos_session");
   if (sessionCookie?.expires) {
     return new Date(sessionCookie.expires);
@@ -104,48 +106,46 @@ async function login(): Promise<void> {
   console.log("Login successful!");
 }
 
-const MAX_LOGIN_ATTEMPTS = 3;
-
 async function ensureLoggedIn(): Promise<void> {
-  if (await isLoggedIn()) return;
+  if (isSessionValid()) return;
 
   console.log("Session expired, logging in...");
   
-  for (let attempt = 1; attempt <= MAX_LOGIN_ATTEMPTS; attempt++) {
-    try {
-      await login();
-      return;
-    } catch (error) {
-      console.error(`Login attempt ${attempt}/${MAX_LOGIN_ATTEMPTS} failed:`, error);
-      
-      if (attempt === MAX_LOGIN_ATTEMPTS) {
-        console.error("Max login attempts reached, terminating...");
-        process.kill(process.pid, "SIGTERM");
-      }
-      
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-    }
+  try {
+    await login();
+  } catch (error) {
+    console.error("Failed to login, terminating...");
+    process.kill(process.pid, "SIGTERM");
   }
 }
 
-async function checkUsername(username: string): Promise<{ available: boolean; cached: boolean }> {
+type CheckResult = 
+  | { ok: true; available: boolean; cached: boolean }
+  | { ok: false; status: number };
+
+async function checkUsername(username: string): Promise<CheckResult> {
   // Check cache first
   const cached = await getCachedAvailability(username);
   if (cached !== null) {
-    return { available: cached, cached: true };
+    return { ok: true, available: cached, cached: true };
   }
 
   // Not in cache, check API
   const response = await fetchWithCookies(
     `https://accounts.hytale.com/api/account/username-reservations/availability?username=${encodeURIComponent(username)}`
   );
+
+  if (response.status !== 200 && response.status !== 400) {
+    console.error(`Hytale API error: ${response.status}`);
+    return { ok: false, status: response.status };
+  }
+
   const available = response.status === 200;
 
   // Cache the result
   await setCachedAvailability(username, available);
 
-  return { available, cached: false };
+  return { ok: true, available, cached: false };
 }
 
 await ensureLoggedIn();
@@ -160,23 +160,28 @@ const app = new Elysia()
       "GET /status": "Get session status",
     },
   }))
-  .get("/check/:username", async ({ params }) => {
+  .get("/check/:username", async ({ params, set }) => {
     await ensureLoggedIn();
     
     const { username } = params;
-    const { available, cached } = await checkUsername(username);
+    const result = await checkUsername(username);
 
-    console.log(`Username "${username}" is ${available ? "available" : "taken"}${cached ? " (cached)" : ""}`);
+    if (!result.ok) {
+      set.status = 502;
+      return { error: "Hytale API error", status: result.status };
+    }
+
+    console.log(`Username "${username}" is ${result.available ? "available" : "taken"}${result.cached ? " (cached)" : ""}`);
     
     return {
       username,
-      available,
-      cached,
+      available: result.available,
+      cached: result.cached,
     };
   })
-  .get("/status", async () => {
-    const loggedIn = await isLoggedIn();
-    const expiresAt = await getSessionExpiry();
+  .get("/status", () => {
+    const loggedIn = isSessionValid();
+    const expiresAt = getSessionExpiry();
     const hoursLeft = expiresAt 
       ? (expiresAt.getTime() - Date.now()) / 1000 / 60 / 60 
       : null;
