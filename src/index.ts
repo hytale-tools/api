@@ -186,9 +186,7 @@ const app = new Elysia()
   .get("/check/:username", async ({ params, set, request, server }) => {
     await ensureLoggedIn();
     
-    console.log('Request IP: ', request.headers.get('cf-connecting-ip'), 'Server IP: ', server?.requestIP(request));
-    console.log('Request headers: ', request.headers);
-    const ip = server?.requestIP(request)?.address ?? "unknown";
+    const ip = request.headers.get('x-real-ip') ?? server?.requestIP(request)?.address ?? 'unknown';
     const { username } = params;
     const result = await checkUsername(username, ip);
 
