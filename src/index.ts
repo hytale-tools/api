@@ -142,9 +142,7 @@ async function checkUsername(username: string, ip: string): Promise<CheckResult>
   }
 
   // Not cached - check rate limit before hitting API
-  const rateLimit = await ratelimit.limit("check_username", {
-    ip
-  });
+  const rateLimit = await ratelimit.limit(ip);
 
   if (!rateLimit.success) {
     return { ok: false, error: "rate_limited", retryAfter: Math.ceil((rateLimit.reset - Date.now()) / 1000) };
