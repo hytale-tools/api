@@ -156,6 +156,10 @@ async function checkUsername(username: string, ip: string): Promise<CheckResult>
 
   if (response.status !== 200 && response.status !== 400) {
     console.error(`Hytale API error: ${response.status}`);
+    if (response.status === 429) {
+      process.kill(process.pid, "SIGTERM");
+    }
+    
     return { ok: false, error: "hytale_api_error", status: response.status };
   }
 
