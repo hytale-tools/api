@@ -145,7 +145,6 @@ async function checkUsername(username: string, ip: string): Promise<CheckResult>
   const rateLimit = await ratelimit.limit(ip);
 
   if (!rateLimit.success) {
-    console.log('Rate limited IP: ', ip);
     return { ok: false, error: "rate_limited", retryAfter: Math.ceil((rateLimit.reset - Date.now()) / 1000) };
   }
 
