@@ -177,14 +177,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "").split(",").map(origin
 
 const app = new Elysia()
   .use(cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.error(`Blocked CORS request from origin: ${origin}`);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
+    origin: process.env.ALLOWED_ORIGINS || "*"
   }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
