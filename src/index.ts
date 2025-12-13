@@ -16,6 +16,33 @@ if (!CREDENTIALS.identifier || !CREDENTIALS.password) {
   process.exit(1);
 }
 
+// Parse CORS origins from environment variable
+const CORS_ORIGINS = process.env.CORS_ORIGINS;
+
+if (!CORS_ORIGINS) {
+  console.error("Missing CORS_ORIGINS in .env");
+  process.exit(1);
+}
+
+const corsOrigins = CORS_ORIGINS.split(',')
+  .map(origin => origin.trim())
+  .filter(origin => origin.length > 0);
+
+if (corsOrigins.length === 0) {
+  console.error("CORS_ORIGINS must contain at least one valid origin");
+  process.exit(1);
+}
+
+// Validate that each origin is a valid URL format
+for (const origin of corsOrigins) {
+  try {
+    new URL(origin);
+  } catch (error) {
+    console.error(`Invalid CORS origin: "${origin}". Each origin must be a valid URL (e.g., http://localhost:3000 or https://example.com)`);
+    process.exit(1);
+  }
+}
+
 // Redis cache
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 const CACHE_PREFIX = "hytale:username:";
@@ -174,7 +201,7 @@ await ensureLoggedIn();
 console.log("Connected to Redis");
 
 const app = new Elysia()
-  .use(cors({ origin: "*" }))
+  .use(cors({ origin: corsOrigins }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
     endpoints: {
