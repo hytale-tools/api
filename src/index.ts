@@ -24,7 +24,24 @@ if (!CORS_ORIGINS) {
   process.exit(1);
 }
 
-const corsOrigins = CORS_ORIGINS.split(',').map(origin => origin.trim());
+const corsOrigins = CORS_ORIGINS.split(',')
+  .map(origin => origin.trim())
+  .filter(origin => origin.length > 0);
+
+if (corsOrigins.length === 0) {
+  console.error("CORS_ORIGINS must contain at least one valid origin");
+  process.exit(1);
+}
+
+// Validate that each origin is a valid URL format
+for (const origin of corsOrigins) {
+  try {
+    new URL(origin);
+  } catch (error) {
+    console.error(`Invalid CORS origin: "${origin}". Each origin must be a valid URL (e.g., http://localhost:3000 or https://example.com)`);
+    process.exit(1);
+  }
+}
 
 // Redis cache
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
