@@ -5,19 +5,15 @@ import fetchCookie from "fetch-cookie";
 import { Ratelimit } from "@upstash/ratelimit";
 import Redis from "ioredis";
 import { createIoRedisAdapter } from "./redis";
+import { env } from "./env";
 
 const CREDENTIALS = {
-  identifier: process.env.HYTALE_EMAIL!,
-  password: process.env.HYTALE_PASSWORD!,
+  identifier: env.HYTALE_EMAIL,
+  password: env.HYTALE_PASSWORD,
 };
 
-if (!CREDENTIALS.identifier || !CREDENTIALS.password) {
-  console.error("Missing HYTALE_EMAIL or HYTALE_PASSWORD in .env");
-  process.exit(1);
-}
-
 // Redis cache
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+const redis = new Redis(env.REDIS_URL);
 const CACHE_PREFIX = "hytale:username:";
 const AVAILABLE_TTL = 60; // 1 minute for available names
 
@@ -174,7 +170,7 @@ await ensureLoggedIn();
 console.log("Connected to Redis");
 
 const app = new Elysia()
-  .use(cors({ origin: "*" }))
+  .use(cors({ origin: env.CORS_ORIGINS }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
     endpoints: {
