@@ -173,8 +173,19 @@ async function checkUsername(username: string, ip: string): Promise<CheckResult>
 await ensureLoggedIn();
 console.log("Connected to Redis");
 
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "").split(",").map(origin => origin.trim());
+
 const app = new Elysia()
-  .use(cors({ origin: "*" }))
+  .use(cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`Blocked CORS request from origin: ${origin}`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+  }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
     endpoints: {
