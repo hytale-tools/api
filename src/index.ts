@@ -173,8 +173,12 @@ async function checkUsername(username: string, ip: string): Promise<CheckResult>
 await ensureLoggedIn();
 console.log("Connected to Redis");
 
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "").split(",").map(origin => origin.trim());
+
 const app = new Elysia()
-  .use(cors({ origin: "*" }))
+  .use(cors({
+    origin: process.env.ALLOWED_ORIGINS || "*"
+  }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
     endpoints: {
