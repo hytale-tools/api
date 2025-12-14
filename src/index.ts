@@ -23,7 +23,7 @@ const AVAILABLE_TTL = 60; // 1 minute for available names
 
 const ratelimit = new Ratelimit({
   redis: createIoRedisAdapter(redis),
-  limiter: Ratelimit.slidingWindow(25, "60 s"), // 25 requests per minute
+  limiter: Ratelimit.slidingWindow(30, "60 s"), // 30 requests per minute
   prefix: "hytale:ratelimit",
 });
 
