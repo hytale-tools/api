@@ -174,7 +174,7 @@ await ensureLoggedIn();
 console.log("Connected to Redis");
 
 const app = new Elysia()
-  .use(cors({ origin: "*" }))
+  .use(cors({ origin: "*", exposeHeaders: ["retry-after"] }))
   .get("/", () => ({
     message: "Hytale Username Checker API",
     endpoints: {
@@ -193,7 +193,7 @@ const app = new Elysia()
       if (result.error === "rate_limited") {
         set.status = 429;
         set.headers["retry-after"] = String(result.retryAfter);
-        return { error: "rate_limited", retryAfter: result.retryAfter };
+        return undefined;
       }
       
       set.status = 502;
