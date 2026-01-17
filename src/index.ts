@@ -5,14 +5,16 @@ import fetchCookie from "fetch-cookie";
 import { Ratelimit } from "@upstash/ratelimit";
 import Redis from "ioredis";
 import { createIoRedisAdapter } from "./redis";
+import { authenticator } from "otplib";
 
 const CREDENTIALS = {
   identifier: process.env.HYTALE_EMAIL!,
   password: process.env.HYTALE_PASSWORD!,
+  secret: process.env.HYTALE_2FA_SECRET!,
 };
 
-if (!CREDENTIALS.identifier || !CREDENTIALS.password) {
-  console.error("Missing HYTALE_EMAIL or HYTALE_PASSWORD in .env");
+if (!CREDENTIALS.identifier || !CREDENTIALS.password || !CREDENTIALS.secret) {
+  console.error("Missing HYTALE_EMAIL or HYTALE_PASSWORD or HYTALE_SECRET in .env");
   process.exit(1);
 }
 
@@ -75,14 +77,19 @@ async function login(): Promise<void> {
 
   const location = initResponse.headers.get("location");
   const flowMatch = location?.match(/flow=([a-f0-9-]+)/);
+
   if (!flowMatch) {
     throw new Error("Could not extract flow ID");
   }
+
   const flowId = flowMatch[1];
   console.log("Flow ID:", flowId);
 
-  const cookies = await cookieJar.getCookies("https://backend.accounts.hytale.com");
-  const csrfCookie = cookies.find(c => c.key.startsWith("csrf_token"));
+  const cookies = await cookieJar.getCookies(
+    "https://backend.accounts.hytale.com",
+  );
+  const csrfCookie = cookies.find((c) => c.key.startsWith("csrf_token"));
+
   if (!csrfCookie) {
     throw new Error("Could not find CSRF token cookie");
   }
@@ -101,32 +108,102 @@ async function login(): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formData,
-      redirect: "manual",
-    }
+    },
   );
 
-  const redirectLocation = loginResponse.headers.get("location");
-  if (loginResponse.status !== 303 || !redirectLocation?.includes("/settings")) {
-    const body = await loginResponse.text();
-    throw new Error(`Login failed: ${loginResponse.status} - ${body.slice(0, 200)}`);
+  const finalUrl = loginResponse.url;
+
+  if (finalUrl.includes("flow=")) {
+    await submit2FA(finalUrl);
+    return;
   }
 
-  await fetchWithCookies(redirectLocation, { redirect: "follow" });
+  if (!finalUrl.includes("/settings")) {
+    const body = await loginResponse.text();
+
+    throw new Error(
+      `Login failed: ended up at ${loginResponse.status} - ${body.slice(0, 200)}`,
+    );
+  }
+
   console.log("Login successful!");
 }
 
+let loginInProgress: Promise<void> | null = null;
+
 async function ensureLoggedIn(): Promise<void> {
   if (isSessionValid()) return;
+  
+  if (loginInProgress) {
+    return loginInProgress;
+  }
 
   console.log("Session expired, logging in...");
   
-  try {
-    await login();
-  } catch (error) {
-    console.error("Failed to login, terminating...");
-    process.kill(process.pid, "SIGTERM");
-  }
+  loginInProgress = login()
+    .catch((err) => {
+      const error = err instanceof Error ? err.message : String(err);
+      console.error("Failed to login", { error });
+    })
+    .finally(() => {
+      loginInProgress = null;
+    });
+
+  return loginInProgress;
 }
+
+async function submit2FA(flowUrl: string): Promise<void> {
+  const flowMatch = flowUrl.match(/flow=([a-f0-9-]+)/);
+
+  if (!flowMatch) {
+    throw new Error("Could not extract 2FA flow ID");
+  }
+
+  const flowId = flowMatch[1];
+
+  console.log("2FA required, submitting TOTP code...", { flowId });
+
+  const cookies = await cookieJar.getCookies(
+    "https://backend.accounts.hytale.com",
+  );
+  const csrfCookie = cookies.find((c) => c.key.startsWith("csrf_token"));
+
+  if (!csrfCookie) {
+    throw new Error("Could not find CSRF token cookie for 2FA");
+  }
+
+  const totpCode = authenticator.generate(CREDENTIALS.secret);
+
+  console.log("Generated TOTP code", { totpCode });
+
+  const formData = new URLSearchParams({
+    csrf_token: csrfCookie.value,
+    totp_code: totpCode,
+    method: "totp",
+  });
+
+  const totpResponse = await fetchWithCookies(
+    `https://backend.accounts.hytale.com/self-service/login?flow=${flowId}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formData,
+    },
+  );
+
+  const finalUrl = totpResponse.url;
+
+  if (!finalUrl.includes("/settings")) {
+    const body = await totpResponse.text();
+
+    throw new Error(
+      `2FA verification failed: ended up at ${finalUrl} - ${body.slice(0, 200)}`,
+    );
+  }
+
+  console.log("2FA verification successful!");
+}
+
 
 type CheckResult = 
   | { ok: true; available: boolean; cached: boolean }
